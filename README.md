@@ -1,6 +1,6 @@
-# Intercom Studio Chat Bridge
+# Intercom Studio Chat Middleware
 
-[![CI](https://github.com/studiochat/intercom-studiochat-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/studiochat/intercom-studiochat-bridge/actions/workflows/ci.yml)
+[![CI](https://github.com/studiochat/intercom-studiochat-middleware/actions/workflows/ci.yml/badge.svg)](https://github.com/studiochat/intercom-studiochat-middleware/actions/workflows/ci.yml)
 
 A lightweight, open-source middleware that connects [Intercom](https://www.intercom.com/) with AI-powered chatbots via Studio Chat API. Route conversations to AI assistants based on configurable rules, with full support for handoff to human agents.
 
@@ -21,8 +21,8 @@ A lightweight, open-source middleware that connects [Intercom](https://www.inter
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/studiochat/intercom-studiochat-bridge.git
-cd intercom-studiochat-bridge
+git clone https://github.com/studiochat/intercom-studiochat-middleware.git
+cd intercom-studiochat-middleware
 ```
 
 ### 2. Install dependencies
@@ -141,7 +141,7 @@ assistants:
 
 ### Media Message Handling
 
-When users send media (images, audio, video, or file attachments) that the AI cannot process, the bridge automatically:
+When users send media (images, audio, video, or file attachments) that the AI cannot process, the middleware automatically:
 
 1. Sends a user-facing message explaining the limitation
 2. Executes the configured handoff actions
@@ -220,7 +220,7 @@ This sends a context object to Studio Chat:
 1. Go to the [Intercom Developer Hub](https://developers.intercom.com/)
 2. Click **Your Apps** in the top right
 3. Click **New app**
-4. Enter a name (e.g., "Studio Chat Bridge") and select your workspace
+4. Enter a name (e.g., "Studio Chat Middleware") and select your workspace
 5. Click **Create app**
 
 ### 2. Configure Permissions
@@ -335,19 +335,19 @@ The YAML content supports `${VAR_NAME}` syntax for environment variable interpol
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: intercom-bridge
+  name: intercom-middleware
 spec:
   replicas: 2
   template:
     spec:
       containers:
         - name: bridge
-          image: your-registry/intercom-studiochat-bridge:latest
+          image: studiochat/intercom-bridge-middleware:latest
           ports:
             - containerPort: 8080
           envFrom:
             - secretRef:
-                name: intercom-bridge-secrets
+                name: intercom-middleware-secrets
           volumeMounts:
             - name: config
               mountPath: /app/config.yaml
@@ -402,7 +402,7 @@ poetry run black .
                               │
                               ▼ Webhook (conversation.user.replied)
 ┌─────────────────────────────────────────────────────────────────┐
-│                 Intercom Studio Chat Bridge                      │
+│              Intercom Studio Chat Middleware                         │
 │                                                                  │
 │  1. Parse webhook & extract message                             │
 │  2. Find matching assistant (routing rules)                     │
@@ -435,5 +435,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-- [GitHub Issues](https://github.com/studiochat/intercom-studiochat-bridge/issues)
-- [Documentation](https://github.com/studiochat/intercom-studiochat-bridge/wiki)
+- [GitHub Issues](https://github.com/studiochat/intercom-studiochat-middleware/issues)
+- [Documentation](https://github.com/studiochat/intercom-studiochat-middleware/wiki)

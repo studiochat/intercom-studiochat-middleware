@@ -1,0 +1,192 @@
+# Intercom Studio Chat Bridge Configuration
+# Copy this file to config.yaml and customize for your use case
+
+# === Global Configuration ===
+
+# Studio Chat connection settings
+studio_chat:
+  # API key for authentication (always use env var for security)
+  api_key: ${STUDIO_CHAT_API_KEY}
+  # Base URL (optional, defaults to https://api.studiochat.io)
+  # base_url: https://api.studiochat.io
+  # Request timeout in seconds
+  timeout_seconds: 120
+
+# Intercom connection settings
+intercom:
+  # Intercom access token (always use env var for security)
+  access_token: ${INTERCOM_ACCESS_TOKEN}
+
+# Logging configuration
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: INFO
+
+# === Assistants Configuration ===
+# Each assistant represents a different AI playbook with its own routing rules
+
+assistants:
+  # Example: Sales Assistant
+  - playbook_id: "your-playbook-id-here"
+    # Intercom admin/bot ID that will send responses
+    admin_id: "your-admin-id"
+
+    # Send Intercom conversation tags to Studio Chat (default: false)
+    send_tags: true
+
+    # Rollout configuration
+    rollout:
+      # Percentage of conversations to route to AI (0-100)
+      # Can use env var: ${ROLLOUT_PERCENTAGE}
+      # Uses deterministic hashing so same conversation always goes to same backend
+      percentage: ${ROLLOUT_PERCENTAGE}
+
+    # Routing rules - any rule that matches will activate this assistant
+    # Rules are evaluated in order, first match wins
+    routing_rules:
+      # Route conversations from a specific inbox
+      - type: inbox
+        inbox_id: "your-inbox-id"
+
+    # Tag to add while AI is handling the conversation (for tracking)
+    tracking_tag: "__ai_assistant"
+
+    # Actions to execute when AI requests handoff to human
+    # Supports tag-based branching to route to different destinations
+    handoff:
+      # Custom messages for media handoff (images, audio, video, attachments)
+      # When a user sends media, the AI cannot process it, so we:
+      # 1. Send this message to the user
+      # 2. Execute the handoff actions
+      # If not specified, uses default Spanish messages
+      media_handoff_messages:
+        image: "No puedo procesar imágenes. Te derivo a un agente."
+        audio: "No puedo procesar audio. Te derivo a un agente."
+        video: "No puedo procesar videos. Te derivo a un agente."
+        attachment: "No puedo procesar archivos. Te derivo a un agente."
+
+      # Tag-based branches (evaluated in order, first match wins)
+      branches:
+        # Route "sales" tagged conversations to sales inbox
+        - tag: "sales"
+          actions:
+            - type: add_tag
+              tag_name: "ai-handoff-sales"
+            - type: transfer_to_inbox
+              inbox_id: "sales-human-inbox-id"
+            - type: add_note
+              template: "AI handoff to Sales. Reason: {reason}"
+
+        # Route "support" tagged conversations to support inbox
+        - tag: "support"
+          actions:
+            - type: add_tag
+              tag_name: "ai-handoff-support"
+            - type: transfer_to_inbox
+              inbox_id: "support-human-inbox-id"
+            - type: add_note
+              template: "AI handoff to Support. Reason: {reason}"
+
+        # Route "billing" tagged conversations to billing team
+        - tag: "billing"
+          actions:
+            - type: add_tag
+              tag_name: "ai-handoff-billing"
+            - type: assign_to_admin
+              admin_id: "billing-specialist-id"
+            - type: add_note
+              template: "AI handoff to Billing specialist. Reason: {reason}"
+
+      # Default actions when no branch matches (fallback)
+      actions:
+        # Add a tag to mark the handoff
+        - type: add_tag
+          tag_name: "ai-handoff"
+        # Transfer to general human agents inbox
+        - type: transfer_to_inbox
+          inbox_id: "your-human-inbox-id"
+        # Add a private note with context
+        - type: add_note
+          template: "AI handoff requested. Reason: {reason}"
+
+    # Actions to execute when AI is unavailable (503, timeout) or excluded from rollout
+    fallback:
+      actions:
+        - type: add_tag
+          tag_name: "ai-unavailable"
+        - type: transfer_to_inbox
+          inbox_id: "your-human-inbox-id"
+        - type: add_note
+          template: "AI assistant unavailable. Please handle manually."
+
+    # Context enrichment - data sent to Studio Chat with each message
+    # Fetches additional attributes from Intercom API
+    context:
+      # Contact attributes to include (fetched from GET /contacts/{id})
+      # Supports dot notation for nested fields like custom_attributes
+      contact_attributes:
+        - email
+        - name
+        - phone
+        - external_id
+        - "custom_attributes.Plan Type"
+        - "custom_attributes.Subscription Status"
+
+      # Conversation attributes to include (fetched from GET /conversations/{id})
+      conversation_attributes:
+        - "custom_attributes.Ticket Priority"
+        - "custom_attributes.Department"
+
+      # Static values to always include
+      static:
+        platform: intercom
+        source: webhook
+
+  # Example: Support Assistant with tag-based routing
+  # - playbook_id: "support-playbook-id"
+  #   admin_id: "support-admin-id"
+  #
+  #   rollout:
+  #     percentage: 50  # Only 50% of conversations
+  #
+  #   routing_rules:
+  #     - type: inbox
+  #       inbox_id: "support-inbox-id"
+  #     - type: tag
+  #       tag_name: "ai-support"  # Also route if this tag is present
+  #
+  #   tracking_tag: "__ai_support"
+  #
+  #   handoff:
+  #     actions:
+  #       - type: assign_to_admin
+  #         admin_id: "human-agent-id"  # Assign to specific person
+  #
+  #   fallback:
+  #     actions:
+  #       - type: transfer_to_inbox
+  #         inbox_id: "support-human-inbox-id"
+
+  # Example: VIP Assistant with admin assignment routing
+  # - playbook_id: "vip-playbook-id"
+  #   admin_id: "vip-bot-id"
+  #
+  #   rollout:
+  #     percentage: 100
+  #
+  #   routing_rules:
+  #     # Activate when conversation is assigned to this admin
+  #     - type: admin_assignment
+  #       admin_id: "vip-bot-id"
+  #
+  #   tracking_tag: "__ai_vip"
+  #
+  #   handoff:
+  #     actions:
+  #       - type: transfer_to_inbox
+  #         inbox_id: "vip-human-inbox-id"
+  #
+  #   fallback:
+  #     actions:
+  #       - type: transfer_to_inbox
+  #         inbox_id: "vip-human-inbox-id"

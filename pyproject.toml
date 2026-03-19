@@ -1,0 +1,62 @@
+[tool.poetry]
+name = "intercom-studiochat-bridge"
+version = "1.0.0"
+description = "Lightweight middleware to connect Intercom with Studio Chat AI assistants"
+authors = ["Ivan Itzcovich <itzco@studiochat.io>"]
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/studiochat/intercom-studiochat-bridge"
+keywords = ["intercom", "ai", "chatbot", "studio-chat", "middleware"]
+packages = [{include = "bridge"}]
+
+[tool.poetry.dependencies]
+python = "3.12.9"
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.32.0"}
+pydantic = "^2.10.0"
+pydantic-settings = "^2.6.0"
+pyyaml = "^6.0.2"
+httpx = "^0.28.0"
+loguru = "^0.7.0"
+html2text = "^2024.2.26"
+python-dotenv = "^1.2.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.0"
+pytest-asyncio = "^0.24.0"
+pytest-cov = "^6.0.0"
+black = "^24.10.0"
+ruff = "^0.8.0"
+mypy = "^1.13.0"
+types-PyYAML = "^6.0.12"
+pre-commit = "^4.0.0"
+
+[tool.poetry.scripts]
+intercom-bridge = "bridge.app:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "loguru"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

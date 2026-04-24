@@ -8,11 +8,13 @@ assignments, or attribute updates.
 
 from bridge.app import (
     _detect_media_type,
+    _extract_attachment_document_info,
     _extract_attachment_image_urls,
     _extract_last_user_message,
     _find_last_user_message_in_parts,
     _has_admin_comment_reply,
     _has_admin_reply_after_index,
+    _is_document_attachment,
     _is_image_attachment,
 )
 
@@ -126,7 +128,9 @@ class TestFindLastUserMessageInParts:
         parts = [
             {"author": {"type": "user"}, "body": "<p>Hello</p>", "part_type": "comment"},
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message == "Hello"
         assert index == 0
         assert has_media is False
@@ -140,7 +144,9 @@ class TestFindLastUserMessageInParts:
             {"author": {"type": "admin"}, "body": "Reply", "part_type": "comment"},
             {"author": {"type": "user"}, "body": "<p>Second</p>", "part_type": "comment"},
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message == "Second"
         assert index == 2
         assert has_media is False
@@ -152,7 +158,9 @@ class TestFindLastUserMessageInParts:
         parts = [
             {"author": {"type": "lead"}, "body": "<p>Lead message</p>", "part_type": "comment"},
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message == "Lead message"
         assert index == 0
         assert has_media is False
@@ -167,7 +175,9 @@ class TestFindLastUserMessageInParts:
                 "part_type": "comment",
             },
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message == "Contact message"
         assert index == 0
         assert has_media is False
@@ -178,7 +188,9 @@ class TestFindLastUserMessageInParts:
         parts = [
             {"author": {"type": "admin"}, "body": "Admin message", "part_type": "comment"},
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message is None
         assert index == -1
         assert has_media is False
@@ -186,7 +198,9 @@ class TestFindLastUserMessageInParts:
 
     def test_empty_parts(self):
         """Should return None for empty parts list."""
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts([])
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts([])
+        )
         assert message is None
         assert index == -1
         assert has_media is False
@@ -197,7 +211,9 @@ class TestFindLastUserMessageInParts:
         parts = [
             {"author": {"type": "user"}, "body": "", "part_type": "comment"},
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message is None
         assert index == -1
         assert has_media is False
@@ -212,7 +228,9 @@ class TestFindLastUserMessageInParts:
                 "part_type": "comment",
             },
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message is None
         assert index == -1
         assert has_media is False
@@ -227,7 +245,9 @@ class TestFindLastUserMessageInParts:
                 "part_type": "comment",
             },
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message is None
         assert index == -1
         assert has_media is False
@@ -242,7 +262,9 @@ class TestFindLastUserMessageInParts:
                 "part_type": "comment",
             },
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message is None  # No text besides the image
         assert index == 0
         assert has_media is True
@@ -258,15 +280,17 @@ class TestFindLastUserMessageInParts:
                 "part_type": "comment",
             },
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message is None
         assert index == 0
         assert has_media is True
         assert media_type == "audio"
         assert image_urls is None
 
-    def test_attachment_detected(self):
-        """Should detect attachments."""
+    def test_document_attachment_detected(self):
+        """Should detect document attachments (PDF)."""
         parts = [
             {
                 "author": {"type": "user"},
@@ -275,12 +299,39 @@ class TestFindLastUserMessageInParts:
                 "attachments": [{"url": "https://example.com/file.pdf"}],
             },
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
+        assert message == "Here is a file"
+        assert index == 0
+        assert has_media is True
+        assert media_type == "document"
+        assert image_urls is None
+        assert doc_atts == [
+            {"url": "https://example.com/file.pdf", "content_type": "", "filename": ""}
+        ]
+
+    def test_unsupported_attachment_detected(self):
+        """Should detect unsupported attachments (ZIP)."""
+        parts = [
+            {
+                "author": {"type": "user"},
+                "body": "<p>Here is a file</p>",
+                "part_type": "comment",
+                "attachments": [
+                    {"url": "https://example.com/file.zip", "content_type": "application/zip"}
+                ],
+            },
+        ]
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message is None
         assert index == 0
         assert has_media is True
         assert media_type == "attachment"
         assert image_urls is None
+        assert doc_atts is None
 
     def test_text_after_media_returns_text(self):
         """Text message after media should return the text, not media."""
@@ -296,7 +347,9 @@ class TestFindLastUserMessageInParts:
                 "part_type": "comment",
             },
         ]
-        message, index, has_media, media_type, image_urls = _find_last_user_message_in_parts(parts)
+        message, index, has_media, media_type, image_urls, doc_atts = (
+            _find_last_user_message_in_parts(parts)
+        )
         assert message == "Here is more context"
         assert index == 1
         assert has_media is False
@@ -611,8 +664,8 @@ class TestExtractLastUserMessage:
         assert result.media_type == "image"
         assert result.image_urls == ["https://downloads.intercomcdn.com/i/o/abc/photo.png"]
 
-    def test_pdf_attachment_still_triggers_attachment_type(self):
-        """PDF attachments should still be classified as 'attachment', not 'image'."""
+    def test_pdf_attachment_detected_as_document(self):
+        """PDF attachments should be classified as 'document'."""
         conversation = {
             "source": {"author": {"type": "user"}, "body": "<p>Hola</p>"},
             "conversation_parts": {
@@ -624,6 +677,7 @@ class TestExtractLastUserMessage:
                         "attachments": [
                             {
                                 "type": "upload",
+                                "name": "doc.pdf",
                                 "url": "https://example.com/doc.pdf",
                                 "content_type": "application/pdf",
                             }
@@ -634,11 +688,51 @@ class TestExtractLastUserMessage:
         }
         result = _extract_last_user_message(conversation)
         assert result.has_media is True
-        assert result.media_type == "attachment"
+        assert result.media_type == "document"
         assert result.image_urls is None
+        assert result.document_attachments == [
+            {
+                "url": "https://example.com/doc.pdf",
+                "content_type": "application/pdf",
+                "filename": "doc.pdf",
+            },
+        ]
 
-    def test_mixed_image_and_pdf_attachment_is_attachment(self):
-        """Mixed attachments (image + PDF) should be classified as 'attachment'."""
+    def test_txt_attachment_detected_as_document(self):
+        """TXT attachments should be classified as 'document'."""
+        conversation = {
+            "source": {"author": {"type": "user"}, "body": "<p>Hola</p>"},
+            "conversation_parts": {
+                "conversation_parts": [
+                    {
+                        "author": {"type": "user"},
+                        "body": "",
+                        "part_type": "comment",
+                        "attachments": [
+                            {
+                                "type": "upload",
+                                "name": "notes.txt",
+                                "url": "https://example.com/notes.txt",
+                                "content_type": "text/plain",
+                            }
+                        ],
+                    },
+                ]
+            },
+        }
+        result = _extract_last_user_message(conversation)
+        assert result.has_media is True
+        assert result.media_type == "document"
+        assert result.document_attachments == [
+            {
+                "url": "https://example.com/notes.txt",
+                "content_type": "text/plain",
+                "filename": "notes.txt",
+            },
+        ]
+
+    def test_mixed_image_and_pdf_detected_as_mixed(self):
+        """Mixed attachments (image + PDF) should be classified as 'mixed'."""
         conversation = {
             "source": {"author": {"type": "user"}, "body": "<p>Hola</p>"},
             "conversation_parts": {
@@ -655,6 +749,7 @@ class TestExtractLastUserMessage:
                             },
                             {
                                 "type": "upload",
+                                "name": "doc.pdf",
                                 "url": "https://example.com/doc.pdf",
                                 "content_type": "application/pdf",
                             },
@@ -665,7 +760,104 @@ class TestExtractLastUserMessage:
         }
         result = _extract_last_user_message(conversation)
         assert result.has_media is True
+        assert result.media_type == "mixed"
+        assert result.image_urls == ["https://example.com/photo.jpg"]
+        assert result.document_attachments == [
+            {
+                "url": "https://example.com/doc.pdf",
+                "content_type": "application/pdf",
+                "filename": "doc.pdf",
+            },
+        ]
+
+    def test_unsupported_attachment_still_triggers_attachment(self):
+        """Unsupported attachment types (e.g., ZIP) should still classify as 'attachment'."""
+        conversation = {
+            "source": {"author": {"type": "user"}, "body": "<p>Hola</p>"},
+            "conversation_parts": {
+                "conversation_parts": [
+                    {
+                        "author": {"type": "user"},
+                        "body": "",
+                        "part_type": "comment",
+                        "attachments": [
+                            {
+                                "type": "upload",
+                                "url": "https://example.com/archive.zip",
+                                "content_type": "application/zip",
+                            }
+                        ],
+                    },
+                ]
+            },
+        }
+        result = _extract_last_user_message(conversation)
+        assert result.has_media is True
         assert result.media_type == "attachment"
+
+    def test_mixed_document_and_unsupported_is_attachment(self):
+        """Mix of document + unsupported should classify as 'attachment' (handoff)."""
+        conversation = {
+            "source": {"author": {"type": "user"}, "body": "<p>Hola</p>"},
+            "conversation_parts": {
+                "conversation_parts": [
+                    {
+                        "author": {"type": "user"},
+                        "body": "",
+                        "part_type": "comment",
+                        "attachments": [
+                            {
+                                "type": "upload",
+                                "url": "https://example.com/doc.pdf",
+                                "content_type": "application/pdf",
+                            },
+                            {
+                                "type": "upload",
+                                "url": "https://example.com/archive.zip",
+                                "content_type": "application/zip",
+                            },
+                        ],
+                    },
+                ]
+            },
+        }
+        result = _extract_last_user_message(conversation)
+        assert result.has_media is True
+        assert result.media_type == "attachment"
+
+    def test_document_with_text(self):
+        """Document attachment with caption text should return both."""
+        conversation = {
+            "source": {"author": {"type": "user"}, "body": "<p>Initial</p>"},
+            "conversation_parts": {
+                "conversation_parts": [
+                    {
+                        "author": {"type": "user"},
+                        "body": "<p>Mira este documento</p>",
+                        "part_type": "comment",
+                        "attachments": [
+                            {
+                                "type": "upload",
+                                "name": "informe.pdf",
+                                "url": "https://example.com/informe.pdf",
+                                "content_type": "application/pdf",
+                            }
+                        ],
+                    },
+                ]
+            },
+        }
+        result = _extract_last_user_message(conversation)
+        assert result.has_media is True
+        assert result.media_type == "document"
+        assert result.message == "Mira este documento"
+        assert result.document_attachments == [
+            {
+                "url": "https://example.com/informe.pdf",
+                "content_type": "application/pdf",
+                "filename": "informe.pdf",
+            },
+        ]
 
     def test_whatsapp_image_attachment_with_text(self):
         """WhatsApp image with caption text should return both."""
@@ -747,6 +939,87 @@ class TestExtractAttachmentImageUrls:
         assert _extract_attachment_image_urls([]) == []
 
 
+class TestIsDocumentAttachment:
+    """Tests for _is_document_attachment helper."""
+
+    def test_pdf_content_type(self):
+        assert _is_document_attachment({"content_type": "application/pdf", "url": "x"}) is True
+
+    def test_txt_content_type(self):
+        assert _is_document_attachment({"content_type": "text/plain", "url": "x"}) is True
+
+    def test_image_content_type(self):
+        assert _is_document_attachment({"content_type": "image/jpeg", "url": "x"}) is False
+
+    def test_zip_content_type(self):
+        assert _is_document_attachment({"content_type": "application/zip", "url": "x"}) is False
+
+    def test_no_content_type_pdf_url(self):
+        assert _is_document_attachment({"url": "https://example.com/doc.pdf"}) is True
+
+    def test_no_content_type_txt_url(self):
+        assert _is_document_attachment({"url": "https://example.com/notes.txt"}) is True
+
+    def test_no_content_type_jpg_url(self):
+        assert _is_document_attachment({"url": "https://example.com/photo.jpg"}) is False
+
+    def test_not_a_dict(self):
+        assert _is_document_attachment("not a dict") is False
+
+    def test_empty_dict(self):
+        assert _is_document_attachment({}) is False
+
+
+class TestExtractAttachmentDocumentInfo:
+    """Tests for _extract_attachment_document_info helper."""
+
+    def test_extracts_document_info(self):
+        attachments = [
+            {
+                "content_type": "application/pdf",
+                "url": "https://example.com/a.pdf",
+                "name": "a.pdf",
+            },
+            {"content_type": "text/plain", "url": "https://example.com/b.txt", "name": "b.txt"},
+        ]
+        assert _extract_attachment_document_info(attachments) == [
+            {
+                "url": "https://example.com/a.pdf",
+                "content_type": "application/pdf",
+                "filename": "a.pdf",
+            },
+            {"url": "https://example.com/b.txt", "content_type": "text/plain", "filename": "b.txt"},
+        ]
+
+    def test_skips_non_document_attachments(self):
+        attachments = [
+            {
+                "content_type": "application/pdf",
+                "url": "https://example.com/a.pdf",
+                "name": "a.pdf",
+            },
+            {"content_type": "image/jpeg", "url": "https://example.com/b.jpg"},
+        ]
+        assert _extract_attachment_document_info(attachments) == [
+            {
+                "url": "https://example.com/a.pdf",
+                "content_type": "application/pdf",
+                "filename": "a.pdf",
+            },
+        ]
+
+    def test_empty_list(self):
+        assert _extract_attachment_document_info([]) == []
+
+    def test_missing_name(self):
+        attachments = [
+            {"content_type": "application/pdf", "url": "https://example.com/a.pdf"},
+        ]
+        assert _extract_attachment_document_info(attachments) == [
+            {"url": "https://example.com/a.pdf", "content_type": "application/pdf", "filename": ""},
+        ]
+
+
 class TestDetectMediaType:
     """Tests for _detect_media_type with attachment image detection."""
 
@@ -759,12 +1032,28 @@ class TestDetectMediaType:
 
     def test_pdf_attachment(self):
         atts = [{"content_type": "application/pdf", "url": "https://example.com/a.pdf"}]
-        assert _detect_media_type("", atts) == "attachment"
+        assert _detect_media_type("", atts) == "document"
 
-    def test_mixed_attachments(self):
+    def test_txt_attachment(self):
+        atts = [{"content_type": "text/plain", "url": "https://example.com/a.txt"}]
+        assert _detect_media_type("", atts) == "document"
+
+    def test_mixed_image_and_document(self):
         atts = [
             {"content_type": "image/jpeg", "url": "https://example.com/a.jpg"},
             {"content_type": "application/pdf", "url": "https://example.com/b.pdf"},
+        ]
+        assert _detect_media_type("", atts) == "mixed"
+
+    def test_unsupported_attachment(self):
+        atts = [{"content_type": "application/zip", "url": "https://example.com/a.zip"}]
+        assert _detect_media_type("", atts) == "attachment"
+
+    def test_mixed_document_and_unsupported(self):
+        """Unsupported attachment in the mix should trigger 'attachment' (handoff)."""
+        atts = [
+            {"content_type": "application/pdf", "url": "https://example.com/a.pdf"},
+            {"content_type": "application/zip", "url": "https://example.com/b.zip"},
         ]
         assert _detect_media_type("", atts) == "attachment"
 

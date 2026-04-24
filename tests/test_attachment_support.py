@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from bridge.app import _build_image_attachments
+from bridge.app import _build_document_attachments, _build_image_attachments
 from bridge.utils.html import extract_image_urls
 
 
@@ -181,3 +181,189 @@ class TestBuildImageAttachments:
         """Should return empty list for empty URL list."""
         attachments = await _build_image_attachments([], mock_http_client)
         assert attachments == []
+
+
+class TestBuildDocumentAttachments:
+    """Tests for _build_document_attachments function."""
+
+    @pytest.fixture
+    def mock_http_client(self):
+        """Create a mock HTTP client."""
+        return MagicMock()
+
+    @pytest.fixture
+    def sample_pdf_data(self):
+        """Sample PDF data for testing."""
+        return b"%PDF-1.4 sample content"
+
+    @pytest.mark.asyncio
+    async def test_build_pdf_attachment(self, mock_http_client, sample_pdf_data):
+        """Should build attachment with base64 data and correct media type."""
+        response = MagicMock()
+        response.is_success = True
+        response.content = sample_pdf_data
+        response.headers = {"content-type": "application/pdf"}
+        mock_http_client.get = AsyncMock(return_value=response)
+
+        docs = [
+            {
+                "url": "https://example.com/doc.pdf",
+                "content_type": "application/pdf",
+                "filename": "doc.pdf",
+            }
+        ]
+        attachments = await _build_document_attachments(docs, mock_http_client)
+
+        assert len(attachments) == 1
+        assert attachments[0]["type"] == "document"
+        assert attachments[0]["media_type"] == "application/pdf"
+        assert attachments[0]["data"] == base64.b64encode(sample_pdf_data).decode("utf-8")
+        assert attachments[0]["filename"] == "doc.pdf"
+        assert "url" not in attachments[0]
+
+    @pytest.mark.asyncio
+    async def test_build_txt_attachment(self, mock_http_client):
+        """Should build attachment with text/plain media type."""
+        txt_data = b"Hello world, this is a text file."
+        response = MagicMock()
+        response.is_success = True
+        response.content = txt_data
+        response.headers = {"content-type": "text/plain"}
+        mock_http_client.get = AsyncMock(return_value=response)
+
+        docs = [
+            {
+                "url": "https://example.com/notes.txt",
+                "content_type": "text/plain",
+                "filename": "notes.txt",
+            }
+        ]
+        attachments = await _build_document_attachments(docs, mock_http_client)
+
+        assert len(attachments) == 1
+        assert attachments[0]["type"] == "document"
+        assert attachments[0]["media_type"] == "text/plain"
+        assert attachments[0]["filename"] == "notes.txt"
+
+    @pytest.mark.asyncio
+    async def test_uses_intercom_content_type(self, mock_http_client, sample_pdf_data):
+        """Should prefer content_type from Intercom attachment over response header."""
+        response = MagicMock()
+        response.is_success = True
+        response.content = sample_pdf_data
+        response.headers = {"content-type": "application/octet-stream"}
+        mock_http_client.get = AsyncMock(return_value=response)
+
+        docs = [
+            {
+                "url": "https://example.com/doc.pdf",
+                "content_type": "application/pdf",
+                "filename": "",
+            }
+        ]
+        attachments = await _build_document_attachments(docs, mock_http_client)
+
+        assert len(attachments) == 1
+        assert attachments[0]["media_type"] == "application/pdf"
+
+    @pytest.mark.asyncio
+    async def test_infers_media_type_from_url(self, mock_http_client, sample_pdf_data):
+        """Should infer media type from URL when content_type is missing."""
+        response = MagicMock()
+        response.is_success = True
+        response.content = sample_pdf_data
+        response.headers = {}
+        mock_http_client.get = AsyncMock(return_value=response)
+
+        docs = [{"url": "https://example.com/doc.pdf", "content_type": "", "filename": ""}]
+        attachments = await _build_document_attachments(docs, mock_http_client)
+
+        assert len(attachments) == 1
+        assert attachments[0]["media_type"] == "application/pdf"
+
+    @pytest.mark.asyncio
+    async def test_skips_failed_downloads(self, mock_http_client):
+        """Should skip documents that fail to download."""
+        response = MagicMock()
+        response.is_success = False
+        response.status_code = 404
+        mock_http_client.get = AsyncMock(return_value=response)
+
+        docs = [
+            {
+                "url": "https://example.com/notfound.pdf",
+                "content_type": "application/pdf",
+                "filename": "",
+            }
+        ]
+        attachments = await _build_document_attachments(docs, mock_http_client)
+
+        assert attachments == []
+
+    @pytest.mark.asyncio
+    async def test_handles_download_exception(self, mock_http_client):
+        """Should handle exceptions during download."""
+        mock_http_client.get = AsyncMock(side_effect=Exception("Network error"))
+
+        docs = [
+            {
+                "url": "https://example.com/doc.pdf",
+                "content_type": "application/pdf",
+                "filename": "",
+            }
+        ]
+        attachments = await _build_document_attachments(docs, mock_http_client)
+
+        assert attachments == []
+
+    @pytest.mark.asyncio
+    async def test_build_multiple_attachments(self, mock_http_client, sample_pdf_data):
+        """Should build multiple attachments."""
+        response = MagicMock()
+        response.is_success = True
+        response.content = sample_pdf_data
+        response.headers = {"content-type": "application/pdf"}
+        mock_http_client.get = AsyncMock(return_value=response)
+
+        docs = [
+            {
+                "url": "https://example.com/a.pdf",
+                "content_type": "application/pdf",
+                "filename": "a.pdf",
+            },
+            {
+                "url": "https://example.com/b.pdf",
+                "content_type": "application/pdf",
+                "filename": "b.pdf",
+            },
+        ]
+        attachments = await _build_document_attachments(docs, mock_http_client)
+
+        assert len(attachments) == 2
+
+    @pytest.mark.asyncio
+    async def test_build_empty_list(self, mock_http_client):
+        """Should return empty list for empty input."""
+        attachments = await _build_document_attachments([], mock_http_client)
+        assert attachments == []
+
+    @pytest.mark.asyncio
+    async def test_omits_filename_when_empty(self, mock_http_client, sample_pdf_data):
+        """Should not include filename key when it's empty."""
+        response = MagicMock()
+        response.is_success = True
+        response.content = sample_pdf_data
+        response.headers = {"content-type": "application/pdf"}
+        mock_http_client.get = AsyncMock(return_value=response)
+
+        docs = [
+            {
+                "url": "https://example.com/doc.pdf",
+                "content_type": "application/pdf",
+                "filename": "",
+            }
+        ]
+        attachments = await _build_document_attachments(docs, mock_http_client)
+
+        assert len(attachments) == 1
+        assert "filename" not in attachments[0]

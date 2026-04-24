@@ -47,6 +47,8 @@ from .constants import (
     MEDIA_HANDOFF_REASONS,
     PART_TYPE_COMMENT,
     STUDIO_CHAT_CHATLOG_URL_TEMPLATE,
+    SUPPORTED_DOCUMENT_CONTENT_TYPES,
+    SUPPORTED_DOCUMENT_EXTENSIONS,
     USER_AUTHOR_TYPES,
 )
 from .context import build_context
@@ -82,8 +84,9 @@ class MessageExtractionResult:
 
     message: str | None = None
     has_media: bool = False
-    media_type: str | None = None  # "image", "audio", "video", "attachment"
+    media_type: str | None = None  # "image", "document", "mixed", "audio", "video", "attachment"
     image_urls: list[str] | None = None  # URLs of images in the message
+    document_attachments: list[dict[str, str]] | None = None  # [{url, content_type, filename}]
     admin_assignee_id: str | None = None  # Current admin assigned to conversation
     tags: list[str] = field(default_factory=list)  # Tags from API-fetched conversation
     source_channel_type: str | None = (
@@ -448,9 +451,13 @@ async def process_webhook(
         # Step 1: Fetch and verify conversation from API
         extraction_result = await _fetch_and_verify_conversation(webhook_data, intercom_client)
 
-        # Step 1a: Handle non-image media messages - trigger immediate handoff
-        # Images are now supported and will be sent to Studio Chat
-        if extraction_result.has_media and extraction_result.media_type != "image":
+        # Step 1a: Handle unsupported media messages - trigger immediate handoff
+        # Images and documents are supported and will be sent to Studio Chat
+        if extraction_result.has_media and extraction_result.media_type not in (
+            "image",
+            "document",
+            "mixed",
+        ):
             media_type = extraction_result.media_type or "attachment"
             logger.info("Non-image media triggers handoff: type={}", media_type)
 
@@ -478,12 +485,24 @@ async def process_webhook(
                 reason=reason,
                 conversation_tags=webhook_data.tags,
             )
+
+            # Notify Studio Chat BE so has_handoff is set in analytics
+            await studio_chat_client.mark_handoff(
+                playbook_id=assistant.playbook_id,
+                conversation_id=conversation_id,
+                error_type="unsupported_media",
+            )
             return
 
-        # For images, we need either a message or image URLs
-        # For non-images, we need a message
-        has_image = extraction_result.media_type == "image" and extraction_result.image_urls
-        if not extraction_result.message and not has_image:
+        # For supported media, we need either a message or media content
+        has_image = (
+            extraction_result.media_type in ("image", "mixed") and extraction_result.image_urls
+        )
+        has_document = (
+            extraction_result.media_type in ("document", "mixed")
+            and extraction_result.document_attachments
+        )
+        if not extraction_result.message and not has_image and not has_document:
             return
 
         # Use message if available, otherwise default for image-only messages
@@ -518,12 +537,22 @@ async def process_webhook(
             source_channel_type=extraction_result.source_channel_type,
         )
 
-        # Build attachments for images (download and encode to base64)
+        # Build attachments for images and documents (download and encode to base64)
         attachments = None
         if extraction_result.image_urls:
             attachments = await _build_image_attachments(extraction_result.image_urls, http_client)
             if attachments:
                 logger.info("Sending {} image(s) to Studio Chat", len(attachments))
+        if extraction_result.document_attachments:
+            doc_attachments = await _build_document_attachments(
+                extraction_result.document_attachments, http_client
+            )
+            if doc_attachments:
+                logger.info("Sending {} document(s) to Studio Chat", len(doc_attachments))
+                if attachments:
+                    attachments.extend(doc_attachments)
+                else:
+                    attachments = doc_attachments
 
         # Build tags list if configured (from API-fetched conversation, not webhook)
         tags = extraction_result.tags if assistant.send_tags else None
@@ -641,8 +670,23 @@ def _detect_media_type(body: str, attachments: list[Any] | None) -> str | None:
     if is_video_message(body):
         return "video"
     if attachments and len(attachments) > 0:
-        # Check if all attachments are images (e.g. WhatsApp sends images as attachments)
-        if all(_is_image_attachment(att) for att in attachments):
+        has_images = False
+        has_documents = False
+        has_unsupported = False
+        for att in attachments:
+            if _is_image_attachment(att):
+                has_images = True
+            elif _is_document_attachment(att):
+                has_documents = True
+            else:
+                has_unsupported = True
+        if has_unsupported:
+            return "attachment"
+        if has_images and has_documents:
+            return "mixed"
+        if has_documents:
+            return "document"
+        if has_images:
             return "image"
         return "attachment"
     return None
@@ -669,6 +713,103 @@ def _extract_attachment_image_urls(attachments: list[Any]) -> list[str]:
             if url:
                 urls.append(url)
     return urls
+
+
+def _is_document_attachment(att: Any) -> bool:
+    """Check if an attachment is a supported document based on content_type or URL."""
+    if not isinstance(att, dict):
+        return False
+    content_type = att.get("content_type", "")
+    if content_type and content_type in SUPPORTED_DOCUMENT_CONTENT_TYPES:
+        return True
+    url = (att.get("url") or "").lower().split("?")[0]
+    return url.endswith(tuple(SUPPORTED_DOCUMENT_EXTENSIONS))
+
+
+def _extract_attachment_document_info(attachments: list[Any]) -> list[dict[str, str]]:
+    """Extract document info (url, content_type, filename) from attachment objects."""
+    docs = []
+    for att in attachments:
+        if isinstance(att, dict) and _is_document_attachment(att):
+            url = att.get("url", "")
+            if url:
+                docs.append(
+                    {
+                        "url": url,
+                        "content_type": att.get("content_type", ""),
+                        "filename": att.get("name", ""),
+                    }
+                )
+    return docs
+
+
+async def _build_document_attachments(
+    doc_infos: list[dict[str, str]], http_client: Any
+) -> list[dict[str, Any]]:
+    """
+    Build Studio Chat attachment objects from document info.
+
+    Downloads documents from URLs and converts them to base64.
+
+    Args:
+        doc_infos: List of dicts with url, content_type, filename
+        http_client: HTTP client to download documents
+
+    Returns:
+        List of attachment dicts for Studio Chat API with base64-encoded data
+    """
+    import base64
+    import html
+
+    attachments = []
+    for doc in doc_infos:
+        try:
+            clean_url = html.unescape(doc["url"])
+
+            logger.debug("Downloading document: {}", clean_url[:100])
+            response = await http_client.get(clean_url)
+
+            if not response.is_success:
+                logger.warning("Failed to download document: status={}", response.status_code)
+                continue
+
+            # Use content_type from Intercom attachment, fall back to response header, then infer
+            content_type = doc.get("content_type", "")
+            if not content_type:
+                content_type = response.headers.get("content-type", "").split(";")[0].strip()
+            if not content_type or content_type not in SUPPORTED_DOCUMENT_CONTENT_TYPES:
+                url_lower = doc["url"].lower()
+                if ".pdf" in url_lower:
+                    content_type = "application/pdf"
+                elif ".txt" in url_lower:
+                    content_type = "text/plain"
+                else:
+                    content_type = "application/pdf"
+
+            doc_data = base64.b64encode(response.content).decode("utf-8")
+
+            attachment: dict[str, Any] = {
+                "type": "document",
+                "media_type": content_type,
+                "data": doc_data,
+            }
+            filename = doc.get("filename", "")
+            if filename:
+                attachment["filename"] = filename
+
+            attachments.append(attachment)
+            logger.debug(
+                "Document encoded: type={}, size={} bytes, filename={}",
+                content_type,
+                len(response.content),
+                filename,
+            )
+
+        except Exception as e:
+            logger.error("Error downloading document: {}", str(e))
+            continue
+
+    return attachments
 
 
 async def _build_image_attachments(image_urls: list[str], http_client: Any) -> list[dict[str, Any]]:
@@ -738,31 +879,33 @@ async def _build_image_attachments(image_urls: list[str], http_client: Any) -> l
 
 def _find_last_user_message_in_parts(
     parts: list[dict[str, Any]],
-) -> tuple[str | None, int, bool, str | None, list[str] | None]:
+) -> tuple[str | None, int, bool, str | None, list[str] | None, list[dict[str, str]] | None]:
     """
     Find the last user message in conversation parts.
 
     Scans through all parts and returns the last message from a user
     (not admin/bot) along with its index position. Filters out WhatsApp
     reactions and error messages. Also detects media messages (images,
-    audio, video, attachments) that cannot be processed by AI.
+    documents, audio, video, attachments).
 
     Args:
         parts: List of conversation parts from Intercom API
 
     Returns:
-        Tuple of (message_text, index, has_media, media_type, image_urls)
+        Tuple of (message_text, index, has_media, media_type, image_urls, document_attachments)
         - message_text: The extracted text message, or None if no text
         - index: The index of the last user part, or -1 if none found
         - has_media: True if the message contains media
-        - media_type: Type of media ("image", "audio", "video", "attachment") or None
-        - image_urls: List of image URLs if media_type is "image", else None
+        - media_type: Type of media ("image", "document", "mixed", "audio", "video", "attachment")
+        - image_urls: List of image URLs if media includes images, else None
+        - document_attachments: List of document info dicts if media includes documents, else None
     """
     last_message = None
     last_index = -1
     last_has_media = False
     last_media_type: str | None = None
     last_image_urls: list[str] | None = None
+    last_document_attachments: list[dict[str, str]] | None = None
 
     # Collect author types for debugging
     author_types = []
@@ -809,18 +952,26 @@ def _find_last_user_message_in_parts(
                 last_index = i
                 last_has_media = True
                 last_media_type = media_type
-                # Extract image URLs if it's an image message
-                if media_type == "image":
-                    # Try inline <img> tags first, then attachment URLs
+                # Extract image URLs if media includes images
+                if media_type in ("image", "mixed"):
                     last_image_urls = extract_image_urls(body) if body else []
                     if not last_image_urls and attachments:
                         last_image_urls = _extract_attachment_image_urls(attachments)
-                    # Also extract any accompanying text
+                else:
+                    last_image_urls = None
+                # Extract document info if media includes documents
+                if media_type in ("document", "mixed"):
+                    last_document_attachments = (
+                        _extract_attachment_document_info(attachments) if attachments else None
+                    )
+                else:
+                    last_document_attachments = None
+                # Extract accompanying text for supported media types
+                if media_type in ("image", "document", "mixed"):
                     text = strip_html_tags(body)
                     last_message = text if text else None
                 else:
-                    last_message = None  # Non-image media don't have text we can process
-                    last_image_urls = None
+                    last_message = None  # Unsupported media don't have text we can process
                 continue
 
             if body:
@@ -836,12 +987,20 @@ def _find_last_user_message_in_parts(
                 last_has_media = False
                 last_media_type = None
                 last_image_urls = None
+                last_document_attachments = None
             else:
                 logger.debug("Part {} from user has empty body", i)
 
     logger.debug("Parts scan: authors={}, last_user_idx={}", author_types, last_index)
 
-    return last_message, last_index, last_has_media, last_media_type, last_image_urls
+    return (
+        last_message,
+        last_index,
+        last_has_media,
+        last_media_type,
+        last_image_urls,
+        last_document_attachments,
+    )
 
 
 def _has_admin_reply_after_index(parts: list[dict[str, Any]], index: int) -> bool:
@@ -889,7 +1048,7 @@ def _has_admin_comment_reply(parts: list[dict[str, Any]]) -> bool:
 
 def _extract_source_message(
     conversation: dict[str, Any],
-) -> tuple[str | None, bool, str | None, list[str] | None]:
+) -> tuple[str | None, bool, str | None, list[str] | None, list[dict[str, str]] | None]:
     """
     Extract the initial message from conversation source.
 
@@ -901,7 +1060,7 @@ def _extract_source_message(
         conversation: The conversation data from Intercom API
 
     Returns:
-        Tuple of (message_text, has_media, media_type, image_urls)
+        Tuple of (message_text, has_media, media_type, image_urls, document_attachments)
     """
     source = conversation.get("source", {})
     if source.get("author", {}).get("type") in USER_AUTHOR_TYPES:
@@ -936,24 +1095,31 @@ def _extract_source_message(
         media_type = _detect_media_type(body, attachments)
         if media_type:
             logger.info("Source contains media: type={}", media_type)
-            # Extract image URLs if it's an image message
-            if media_type == "image":
-                # Try inline <img> tags first, then attachment URLs
+            image_urls = None
+            document_atts = None
+            # Extract image URLs if media includes images
+            if media_type in ("image", "mixed"):
                 image_urls = extract_image_urls(body) if body else []
                 if not image_urls and attachments:
                     image_urls = _extract_attachment_image_urls(attachments)
-                # Also extract any accompanying text
+            # Extract document info if media includes documents
+            if media_type in ("document", "mixed"):
+                document_atts = (
+                    _extract_attachment_document_info(attachments) if attachments else None
+                )
+            # Extract accompanying text for supported media types
+            if media_type in ("image", "document", "mixed"):
                 text = strip_html_tags(body)
-                return text if text else None, True, media_type, image_urls
-            return None, True, media_type, None
+                return text if text else None, True, media_type, image_urls, document_atts
+            return None, True, media_type, None, None
 
         if body:
             # Filter out WhatsApp reactions and errors
             if is_whatsapp_reaction(body) or is_whatsapp_error(body):
-                return None, False, None, None
-            return strip_html_tags(body), False, None, None
+                return None, False, None, None, None
+            return strip_html_tags(body), False, None, None, None
 
-    return None, False, None, None
+    return None, False, None, None, None
 
 
 def _extract_last_user_message(conversation: dict[str, Any]) -> MessageExtractionResult:
@@ -983,8 +1149,8 @@ def _extract_last_user_message(conversation: dict[str, Any]) -> MessageExtractio
     parts = conversation.get("conversation_parts", {}).get("conversation_parts", [])
 
     # Try to find message in conversation parts first
-    last_message, last_index, has_media, media_type, image_urls = _find_last_user_message_in_parts(
-        parts
+    last_message, last_index, has_media, media_type, image_urls, document_attachments = (
+        _find_last_user_message_in_parts(parts)
     )
 
     if last_index >= 0:  # Found a user part
@@ -1001,6 +1167,7 @@ def _extract_last_user_message(conversation: dict[str, Any]) -> MessageExtractio
                 has_media=True,
                 media_type=media_type,
                 image_urls=image_urls,
+                document_attachments=document_attachments,
             )
 
         if last_message:
@@ -1010,7 +1177,7 @@ def _extract_last_user_message(conversation: dict[str, Any]) -> MessageExtractio
     logger.debug("No user message found in parts, checking source")
 
     # Fall back to source (initial message)
-    source_message, source_has_media, source_media_type, source_image_urls = (
+    source_message, source_has_media, source_media_type, source_image_urls, source_doc_atts = (
         _extract_source_message(conversation)
     )
 
@@ -1024,6 +1191,7 @@ def _extract_last_user_message(conversation: dict[str, Any]) -> MessageExtractio
             has_media=True,
             media_type=source_media_type,
             image_urls=source_image_urls,
+            document_attachments=source_doc_atts,
         )
 
     if source_message is not None:

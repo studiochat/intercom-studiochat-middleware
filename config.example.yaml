@@ -34,6 +34,12 @@ assistants:
     # Send Intercom conversation tags to Studio Chat (default: false)
     send_tags: true
 
+    # After each AI response, add a private Intercom note with a link to
+    # that specific response in the Studio Chat UI so reviewers can jump
+    # straight there to leave corrections. Requires the Studio Chat API
+    # to return a deep_link on the response (default: false).
+    include_feedback_note: false
+
     # Rollout configuration
     rollout:
       # Percentage of conversations to route to AI (0-100)

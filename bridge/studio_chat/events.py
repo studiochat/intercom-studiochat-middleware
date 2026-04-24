@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from ..constants import MESSAGE_DELAY_SECONDS
+from ..constants import FEEDBACK_NOTE_TEMPLATE, MESSAGE_DELAY_SECONDS
 from ..models import AssistantConfig, StudioChatEventType, StudioChatResponse
 
 if TYPE_CHECKING:
@@ -22,6 +22,7 @@ class ProcessingResult:
     tags_added: int = 0
     handoff_requested: bool = False
     handoff_reason: str | None = None
+    feedback_note_sent: bool = False
 
 
 async def process_events(
@@ -103,12 +104,36 @@ async def process_events(
             case _:
                 logger.warning("Unknown event type: {}", event.event_type)
 
+    # Optional per-assistant feedback note pointing to the Studio Chat UI.
+    # Only fires when:
+    #   - the assistant opts in (include_feedback_note)
+    #   - the BE returned a deep_link for this response
+    #   - we actually delivered something to the user (skip empty / no-op
+    #     responses so we don't clutter the thread with dead links)
+    #   - we didn't request a handoff (a human is taking over — the note
+    #     would be noise for them)
+    if (
+        assistant.include_feedback_note
+        and response.deep_link
+        and (result.messages_sent > 0 or result.notes_sent > 0)
+        and not result.handoff_requested
+    ):
+        note_html = FEEDBACK_NOTE_TEMPLATE.format(url=response.deep_link)
+        await intercom_actions.send_note(
+            conversation_id=conversation_id,
+            admin_id=assistant.admin_id,
+            note=note_html,
+        )
+        result.feedback_note_sent = True
+        logger.info("Feedback note sent with deep link")
+
     logger.info(
-        "Events processed: msgs={}, notes={}, tags={}, handoff={}",
+        "Events processed: msgs={}, notes={}, tags={}, handoff={}, feedback_note={}",
         result.messages_sent,
         result.notes_sent,
         result.tags_added,
         result.handoff_requested,
+        result.feedback_note_sent,
     )
 
     return result

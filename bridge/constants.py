@@ -54,8 +54,19 @@ DEFAULT_CONFIG_PATH = "./config.yaml"
 # Handoff Note Templates (Language-Agnostic)
 # =============================================================================
 HANDOFF_NOTE_TEMPLATE = "🤖→👤 {reason}"
-FIRST_SEEN_NOTE_TEMPLATE = "🤖 Studio Chat: {url}"
+# Intercom renders HTML in notes, so the anchor becomes a compact clickable
+# label instead of the full URL (which Intercom would otherwise auto-linkify
+# and render verbatim, taking up more room than needed).
+FIRST_SEEN_NOTE_TEMPLATE = '🤖 <a href="{url}">Studio Chat</a>'
 DEFAULT_HANDOFF_REASON = "-"
+
+# =============================================================================
+# Feedback Note (Deep Link)
+# =============================================================================
+# Private note inserted after an AI response when an assistant has
+# include_feedback_note=True, so reviewers can jump straight to the exact
+# response in the Studio Chat UI to leave feedback / corrections.
+FEEDBACK_NOTE_TEMPLATE = 'Feedback ✏️? <a href="{url}">link</a>'
 
 # =============================================================================
 # Media Handoff Reasons (Language-Agnostic)
@@ -66,6 +77,12 @@ MEDIA_HANDOFF_REASONS = {
     "video": "🎥",
     "attachment": "📎",
 }
+
+# =============================================================================
+# Supported Document Types (for Studio Chat API)
+# =============================================================================
+SUPPORTED_DOCUMENT_CONTENT_TYPES = frozenset({"application/pdf", "text/plain"})
+SUPPORTED_DOCUMENT_EXTENSIONS = frozenset({".pdf", ".txt"})
 
 # =============================================================================
 # Media Handoff User Message Templates

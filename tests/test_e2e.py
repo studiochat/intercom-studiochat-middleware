@@ -1269,6 +1269,11 @@ class TestHealthEndpoints:
         mock_client.add_response("/conversations/conv-12345/tags", {"id": "conv-12345"})
         mock_client.add_response("/conversations/conv-12345/parts", {"id": "conv-12345"})
         mock_client.add_response("/conversations/conv-12345/reply", {"id": "part-123"})
+        # BE handoff notification
+        mock_client.add_response(
+            "/playbooks/playbook-123/conversations/conv-12345/handoff",
+            {"status": "ok"},
+        )
 
         with (
             patch("bridge.app._config", test_config),
@@ -1285,9 +1290,18 @@ class TestHealthEndpoints:
 
             assert response.status_code == 200
 
-            # Verify Studio Chat was NOT called (audio triggers handoff)
-            studio_calls = [c for c in mock_client.calls if "playbooks" in c["url"]]
-            assert len(studio_calls) == 0
+            # Verify Studio Chat chat API was NOT called (audio triggers handoff)
+            chat_calls = [c for c in mock_client.calls if "/active/chat" in c["url"]]
+            assert len(chat_calls) == 0
+
+            # Verify BE was notified of the handoff
+            handoff_calls = [
+                c
+                for c in mock_client.calls
+                if "/handoff" in c["url"] and "/conversations/" in c["url"]
+            ]
+            assert len(handoff_calls) == 1
+            assert handoff_calls[0]["kwargs"]["json"] == {"error_type": "unsupported_media"}
 
             # Verify handoff was triggered (multiple replies: user message + notes)
             reply_calls = [c for c in mock_client.calls if "/reply" in c["url"]]
@@ -1296,3 +1310,101 @@ class TestHealthEndpoints:
             # Check that the first reply is the audio handoff message
             first_reply = reply_calls[0]["kwargs"]["json"]["body"]
             assert "audio" in first_reply.lower() or "No puedo procesar" in first_reply
+
+
+class TestUnsupportedMediaHandoff:
+    """Tests that unsupported media (video, audio) triggers handoff and notifies BE."""
+
+    @pytest.mark.asyncio
+    async def test_video_message_triggers_handoff_and_notifies_be(self, test_config):
+        """Test that a video message triggers handoff + calls Studio Chat mark_handoff endpoint."""
+        mock_client = MockHttpClient()
+
+        # Conversation with a video message
+        mock_client.add_response(
+            "/conversations/conv-video",
+            {
+                "id": "conv-video",
+                "source": {"author": {"type": "user"}, "body": ""},
+                "conversation_parts": {
+                    "conversation_parts": [
+                        {
+                            "author": {"type": "user"},
+                            "body": "<p>Check this out</p><video src='https://example.com/video.mp4'></video>",
+                        }
+                    ]
+                },
+            },
+        )
+        mock_client.add_response("/tags", {"data": [{"id": "tag-1", "name": "ai-handoff"}]})
+        mock_client.add_response("/conversations/conv-video/tags", {"id": "conv-video"})
+        mock_client.add_response("/conversations/conv-video/reply", {"id": "part-123"})
+        mock_client.add_response("/conversations/conv-video/assign", {"id": "conv-video"})
+        # BE handoff notification endpoint
+        mock_client.add_response(
+            "/playbooks/playbook-123/conversations/conv-video/handoff",
+            {"status": "ok"},
+        )
+
+        payload = {
+            "topic": "conversation.user.replied",
+            "data": {
+                "item": {
+                    "id": "conv-video",
+                    "admin_assignee_id": "admin-456",
+                    "team_assignee_id": "inbox-789",
+                    "tags": {"tags": []},
+                    "contacts": {
+                        "contacts": [
+                            {
+                                "id": "contact-abc",
+                                "name": "Jane",
+                                "email": "jane@example.com",
+                            }
+                        ]
+                    },
+                    "conversation_parts": {
+                        "conversation_parts": [
+                            {
+                                "author": {"type": "user"},
+                                "body": "<p>Check this out</p><video src='https://example.com/video.mp4'></video>",
+                            }
+                        ]
+                    },
+                }
+            },
+        }
+
+        with (
+            patch("bridge.app._config", test_config),
+            patch("bridge.app._http_client", mock_client),
+        ):
+            from httpx import ASGITransport, AsyncClient
+
+            from bridge.app import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post("/webhooks/intercom", json=payload)
+
+            assert response.status_code == 200
+
+            # Verify Studio Chat was NOT called for chat (no AI response for video)
+            chat_calls = [c for c in mock_client.calls if "/active/chat" in c["url"]]
+            assert len(chat_calls) == 0
+
+            # Verify the BE handoff endpoint WAS called
+            handoff_calls = [
+                c
+                for c in mock_client.calls
+                if "/handoff" in c["url"] and "/conversations/" in c["url"]
+            ]
+            assert len(handoff_calls) == 1
+            assert "conv-video" in handoff_calls[0]["url"]
+            assert "playbook-123" in handoff_calls[0]["url"]
+            assert handoff_calls[0]["kwargs"]["json"] == {"error_type": "unsupported_media"}
+
+            # Verify Intercom handoff actions were executed (reply with message + tag + transfer)
+            reply_calls = [c for c in mock_client.calls if "/reply" in c["url"]]
+            assert len(reply_calls) >= 1

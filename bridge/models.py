@@ -153,6 +153,15 @@ class AssistantConfig(BaseModel):
     handoff: HandoffConfig = Field(default_factory=HandoffConfig)
     fallback: FallbackConfig = Field(default_factory=FallbackConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
+    include_feedback_note: bool = Field(
+        default=False,
+        description=(
+            "When true, add a private Intercom note after each AI response "
+            "containing a link back to that response in the Studio Chat UI "
+            "(for quick feedback/corrections). Requires Studio Chat to return "
+            "a deep_link in the response."
+        ),
+    )
 
 
 class AppConfig(BaseModel):
@@ -235,4 +244,12 @@ class StudioChatResponse(BaseModel):
     first_seen: bool = Field(
         default=False,
         description="True if this is the first message in this conversation",
+    )
+    deep_link: str | None = Field(
+        default=None,
+        description=(
+            "URL to this specific assistant response in the Studio Chat "
+            "activity UI (…/activity/chatlogs/<conv_id>?r=<response_index>). "
+            "Used to build feedback links back to the response."
+        ),
     )

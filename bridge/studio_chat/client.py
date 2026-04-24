@@ -182,3 +182,55 @@ class StudioChatClient:
                 e,
             )
             raise StudioChatError(f"Failed to parse response: {e}") from e
+
+    async def mark_handoff(
+        self,
+        playbook_id: str,
+        conversation_id: str,
+        error_type: str = "external_handoff",
+    ) -> None:
+        """
+        Notify Studio Chat that a conversation was handed off externally.
+
+        Called when the bridge triggers a handoff outside the normal AI response
+        flow (e.g., unsupported media types). This saves an error message to
+        the conversation (visible in chat logs) and sets has_handoff=True.
+
+        Args:
+            playbook_id: The playbook/assistant ID
+            conversation_id: Intercom conversation ID
+            error_type: Error type for the chat log entry
+        """
+        url = f"{self.base_url}/playbooks/{playbook_id}/conversations/{conversation_id}/handoff"
+        headers = {
+            "Content-Type": "application/json",
+            "X-API-Key": self.config.api_key,
+        }
+
+        try:
+            response = await self.client.post(
+                url,
+                json={"error_type": error_type},
+                headers=headers,
+                timeout=10,
+            )
+            if response.is_success:
+                logger.info(
+                    "Marked handoff in Studio Chat: playbook={}, conversation={}",
+                    playbook_id,
+                    conversation_id,
+                )
+            else:
+                logger.warning(
+                    "Failed to mark handoff: playbook={}, conversation={}, status={}",
+                    playbook_id,
+                    conversation_id,
+                    response.status_code,
+                )
+        except Exception as e:
+            logger.warning(
+                "Failed to notify Studio Chat of handoff: playbook={}, conversation={}, error={}",
+                playbook_id,
+                conversation_id,
+                e,
+            )

@@ -8,6 +8,7 @@ from loguru import logger
 
 from ..constants import FEEDBACK_NOTE_TEMPLATE, MESSAGE_DELAY_SECONDS
 from ..models import AssistantConfig, StudioChatEventType, StudioChatResponse
+from ..utils.markdown import to_intercom_html
 
 if TYPE_CHECKING:
     from ..intercom.actions import IntercomActions
@@ -55,7 +56,7 @@ async def process_events(
                     await intercom_actions.send_text(
                         conversation_id=conversation_id,
                         admin_id=assistant.admin_id,
-                        message=content,
+                        message=to_intercom_html(content),
                     )
                     result.messages_sent += 1
                     # Small delay between messages for natural pacing

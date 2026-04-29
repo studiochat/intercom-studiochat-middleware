@@ -71,6 +71,78 @@ class TestCustomSchemes:
         assert to_intercom_html("Email me: foo@bar.com") == "Email me: foo@bar.com"
 
 
+class TestDeepLinkSchemes:
+    """Common mobile/desktop deep-link URI schemes seen in production.
+
+    Each entry is the raw URI; we assert the transformer wraps it in an
+    anchor whose href and label both equal the original URI exactly. If a
+    scheme breaks here we either need to widen the path-character set or
+    revisit the URL regex.
+    """
+
+    DEEP_LINKS = [
+        # Mobile app deep links
+        "myapp://link/to/resource",
+        "intercom://conversation/12345",
+        "fb://profile/12345",
+        "twitter://user?screen_name=jack",
+        "whatsapp://send?phone=15551234567",
+        "tg://resolve?domain=username",
+        "slack://channel?team=T123&id=C456",
+        "spotify://track/4iV5W9uYEdYUVa79Axb7Rh",
+        "zoommtg://zoom.us/join?confno=1234567890",
+        "msteams://teams.microsoft.com/l/chat/0/0",
+        # Desktop / IDE
+        "vscode://file/Users/foo/bar.py:10",
+        "jetbrains://idea/navigate/reference?project=foo",
+        # Custom company deep link with path + query + fragment
+        "studio-chat://playbook/abc-123/run?step=2#latest",
+        # Schemes with digits and hyphens in path
+        "app-v2://route/42/action",
+    ]
+
+    def test_each_scheme_wrapped(self):
+        for url in self.DEEP_LINKS:
+            result = to_intercom_html(f"Open: {url} now")
+            assert (
+                f'<a href="{url}">{url}</a>' in result
+            ), f"deep link not wrapped correctly: {url!r}\n  got: {result!r}"
+
+    def test_deep_link_with_query_and_fragment_unchanged(self):
+        # Query params and fragments are part of the URI — must not be split off.
+        url = "studio-chat://playbook/abc/run?step=2&debug=true#latest"
+        result = to_intercom_html(url)
+        assert result == f'<a href="{url}">{url}</a>'
+
+    def test_deep_link_inside_sentence_with_underscores(self):
+        # Underscores anywhere in the URI must not trigger italic markdown.
+        url = "myapp://deep_link/to_resource_id_42"
+        result = to_intercom_html(f"Tap _here_: {url} please")
+        assert "<em>here</em>" in result
+        assert f'<a href="{url}">{url}</a>' in result
+        assert "<em>" not in result.replace("<em>here</em>", "")
+
+    def test_deep_link_with_bold_label_nearby(self):
+        url = "intercom://conversation/12345"
+        result = to_intercom_html(f"**Action**: open {url}")
+        assert "<strong>Action</strong>" in result
+        assert f'<a href="{url}">{url}</a>' in result
+
+    def test_two_deep_links_back_to_back(self):
+        a = "myapp://a/1"
+        b = "myapp://b/2"
+        result = to_intercom_html(f"First {a} then {b}.")
+        assert f'<a href="{a}">{a}</a>' in result
+        assert f'<a href="{b}">{b}</a>' in result
+
+    def test_deep_link_label_and_href_match_exactly(self):
+        # The label inside the anchor must equal the href exactly — no
+        # truncation, no scheme stripping.
+        url = "studio-chat://playbook/p_123/run?step=2"
+        result = to_intercom_html(url)
+        assert result == f'<a href="{url}">{url}</a>'
+
+
 class TestMarkdownFormatting:
     def test_bold_converted(self):
         assert to_intercom_html("**important**") == "<strong>important</strong>"
@@ -99,8 +171,13 @@ class TestEdgeCases:
         # wrapped; we just don't want it crashing or producing empty output.
         assert "https://example.com" in result
 
-    def test_url_at_end_of_sentence_period_kept_in_path(self):
-        # Trailing "." is part of our URL match (not in the exclusion set).
-        # This mirrors wapp's behavior — we accept the trade-off.
+    def test_url_at_end_of_sentence_period_peeled_off(self):
+        # Sentence-ending "." must be peeled off the URL — it's prose, not path.
         result = to_intercom_html("Go to https://example.com.")
-        assert "<a " in result
+        assert '<a href="https://example.com">https://example.com</a>.' in result
+        assert 'href="https://example.com."' not in result
+
+    def test_url_followed_by_question_mark_peeled_off(self):
+        result = to_intercom_html("Did you check https://example.com?")
+        assert '<a href="https://example.com">https://example.com</a>?' in result
+        assert 'href="https://example.com?"' not in result

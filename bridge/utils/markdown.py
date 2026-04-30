@@ -28,11 +28,15 @@ _ITALIC_PATTERN = re.compile(r"_(.+?)_")
 _TRAILING_PUNCT = ".,;:!?"
 
 
+LINK_LABEL = "Link"
+
+
 def to_intercom_html(content: str) -> str:
     """Convert assistant text into HTML safe to send as an Intercom reply body.
 
     - URLs (any scheme that matches RFC 3986, plus bare ``www.``) become
-      ``<a href="URL">URL</a>``.
+      ``<a href="URL">Link</a>`` — the URL is hidden behind a compact label
+      so deep-link URIs and long URLs don't clutter the reply body.
     - ``**text**`` becomes ``<strong>text</strong>``.
     - ``_text_`` becomes ``<em>text</em>``.
 
@@ -66,6 +70,6 @@ def to_intercom_html(content: str) -> str:
     content = _ITALIC_PATTERN.sub(r"<em>\1</em>", content)
 
     for token, url in placeholders.items():
-        content = content.replace(token, f'<a href="{url}">{url}</a>')
+        content = content.replace(token, f'<a href="{url}">{LINK_LABEL}</a>')
 
     return content

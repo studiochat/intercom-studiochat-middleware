@@ -1,5 +1,7 @@
 """High-level actions for interacting with Intercom conversations."""
 
+from typing import Any
+
 from loguru import logger
 
 from ..constants import DEFAULT_HANDOFF_REASON, HANDOFF_NOTE_TEMPLATE
@@ -11,16 +13,26 @@ from .client import IntercomClient
 class IntercomActions:
     """High-level interface for Intercom conversation actions."""
 
-    def __init__(self, client: IntercomClient):
+    def __init__(self, client: IntercomClient, *, skip_outbound: bool = False):
         """
         Initialize Intercom actions.
 
         Args:
             client: The Intercom client instance
+            skip_outbound: Shadow mode. When True, every outbound method logs
+                what it would have done (with the [SHADOW-OUTBOUND] prefix) and
+                returns without touching Intercom. Studio Chat is still called
+                normally upstream.
         """
         self.client = client
         # Cache for tag IDs to avoid repeated lookups
         self._tag_cache: dict[str, str] = {}
+        self.skip_outbound = skip_outbound
+
+    def _shadow_log(self, action: str, **fields: Any) -> None:
+        """Log an outbound action that was suppressed by shadow mode."""
+        rendered = " ".join(f"{k}={v!r}" for k, v in fields.items())
+        logger.info("[SHADOW-OUTBOUND] would {} | {}", action, rendered)
 
     async def send_text(
         self,
@@ -38,6 +50,16 @@ class IntercomActions:
         """
         if is_locked(conversation_id):
             logger.warning("Skipping send_text: conversation {} is in handoff", conversation_id)
+            return
+
+        if self.skip_outbound:
+            self._shadow_log(
+                "send_text (comment)",
+                conversation_id=conversation_id,
+                admin_id=admin_id,
+                len=len(message),
+                preview=message[:200],
+            )
             return
 
         logger.info("Sending text: len={}", len(message))
@@ -68,6 +90,16 @@ class IntercomActions:
             logger.warning("Skipping send_note: conversation {} is in handoff", conversation_id)
             return
 
+        if self.skip_outbound:
+            self._shadow_log(
+                "send_note",
+                conversation_id=conversation_id,
+                admin_id=admin_id,
+                len=len(note),
+                preview=note[:200],
+            )
+            return
+
         logger.info("Sending note: len={}", len(note))
         await self.client.reply_to_conversation(
             conversation_id=conversation_id,
@@ -94,6 +126,15 @@ class IntercomActions:
             logger.warning("Skipping send_image: conversation {} is in handoff", conversation_id)
             return
 
+        if self.skip_outbound:
+            self._shadow_log(
+                "send_image",
+                conversation_id=conversation_id,
+                admin_id=admin_id,
+                image_url=image_url,
+            )
+            return
+
         logger.info("Sending image")
         await self.client.attach_file_to_conversation(
             conversation_id=conversation_id,
@@ -116,6 +157,10 @@ class IntercomActions:
             conversation_id: The conversation ID
             admin_id: The admin ID performing the unassignment
         """
+        if self.skip_outbound:
+            self._shadow_log("unassign", conversation_id=conversation_id, admin_id=admin_id)
+            return
+
         logger.info("Unassigning admin from conversation")
         await self.client.unassign_admin(
             conversation_id=conversation_id,
@@ -138,6 +183,10 @@ class IntercomActions:
             conversation_id: The conversation ID
             admin_id: The admin ID to assign the conversation to
         """
+        if self.skip_outbound:
+            self._shadow_log("assign_self", conversation_id=conversation_id, admin_id=admin_id)
+            return
+
         logger.info("Assigning conversation to admin")
         await self.client.assign_conversation(
             conversation_id=conversation_id,
@@ -160,6 +209,10 @@ class IntercomActions:
             admin_id: The admin ID performing the action
             tag_name: Name of the tag to add
         """
+        if self.skip_outbound:
+            self._shadow_log("add_tag", conversation_id=conversation_id, tag=tag_name)
+            return
+
         logger.info("Adding tag: {}", tag_name)
 
         # Get or create the tag (with caching)
@@ -189,6 +242,14 @@ class IntercomActions:
             admin_id: The admin ID performing the transfer
             inbox_id: The target inbox (team) ID
         """
+        if self.skip_outbound:
+            self._shadow_log(
+                "transfer_to_inbox",
+                conversation_id=conversation_id,
+                inbox_id=inbox_id,
+            )
+            return
+
         logger.info("Transferring to inbox: {}", inbox_id)
 
         # Step 1: Unassign any current admin assignment
@@ -220,6 +281,14 @@ class IntercomActions:
             admin_id: The admin ID performing the assignment
             assignee_id: The admin ID to assign the conversation to
         """
+        if self.skip_outbound:
+            self._shadow_log(
+                "assign_to_admin",
+                conversation_id=conversation_id,
+                assignee_id=assignee_id,
+            )
+            return
+
         logger.info("Assigning to admin: {}", assignee_id)
         await self.client.assign_conversation(
             conversation_id=conversation_id,
@@ -332,8 +401,13 @@ class IntercomActions:
         )
 
         # CRITICAL: Mark conversation as locked FIRST to prevent parallel requests
-        # from sending messages that would trigger self-assign
-        mark_handoff(conversation_id)
+        # from sending messages that would trigger self-assign.
+        # In shadow mode we skip the lock so the bridge keeps observing the
+        # conversation instead of silently dropping its follow-up messages.
+        if self.skip_outbound:
+            self._shadow_log("mark_handoff (lock)", conversation_id=conversation_id)
+        else:
+            mark_handoff(conversation_id)
 
         # Always add handoff note first (language-agnostic with emoji)
         handoff_note = HANDOFF_NOTE_TEMPLATE.format(reason=reason or DEFAULT_HANDOFF_REASON)
@@ -373,8 +447,12 @@ class IntercomActions:
         logger.info("Executing fallback: playbook={}", assistant.playbook_id)
 
         # CRITICAL: Mark conversation as locked to prevent parallel requests
-        # from sending messages that would trigger self-assign
-        mark_handoff(conversation_id)
+        # from sending messages that would trigger self-assign.
+        # In shadow mode we skip the lock so the bridge keeps observing.
+        if self.skip_outbound:
+            self._shadow_log("mark_handoff (lock)", conversation_id=conversation_id)
+        else:
+            mark_handoff(conversation_id)
 
         await self.execute_actions(
             conversation_id=conversation_id,

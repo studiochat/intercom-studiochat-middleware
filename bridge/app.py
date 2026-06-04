@@ -416,6 +416,22 @@ async def _add_first_seen_note(
         logger.warning("First seen note failed: {}", e)
 
 
+def _is_shadow(assistant: Any) -> bool:
+    """Whether outbound Intercom actions should be suppressed (shadow mode).
+
+    Shadow mode still sends traffic to Studio Chat to get the AI completion,
+    but never posts replies / notes / tags / transfers back to Intercom — every
+    side-effect is logged with a [SHADOW-OUTBOUND] prefix instead.
+
+    Resolution: the SHADOW_MODE env var (when truthy) forces it on for ALL
+    assistants; otherwise the per-assistant shadow_mode flag applies.
+    """
+    env_value = os.environ.get("SHADOW_MODE", "").strip().lower()
+    if env_value in ("1", "true", "yes", "on"):
+        return True
+    return bool(assistant.shadow_mode)
+
+
 async def process_webhook(
     webhook_data: Any,
     assistant: Any,
@@ -442,10 +458,14 @@ async def process_webhook(
         playbook_id=assistant.playbook_id,
     )
 
+    is_shadow = _is_shadow(assistant)
+    if is_shadow:
+        logger.info("Shadow mode active: outbound Intercom actions will be suppressed")
+
     try:
         # Create clients
         intercom_client = IntercomClient(config.intercom, http_client)
-        intercom_actions = IntercomActions(intercom_client)
+        intercom_actions = IntercomActions(intercom_client, skip_outbound=is_shadow)
         studio_chat_client = StudioChatClient(config.studio_chat, http_client)
 
         # Step 1: Fetch and verify conversation from API
@@ -486,12 +506,21 @@ async def process_webhook(
                 conversation_tags=webhook_data.tags,
             )
 
-            # Notify Studio Chat BE so has_handoff is set in analytics
-            await studio_chat_client.mark_handoff(
-                playbook_id=assistant.playbook_id,
-                conversation_id=conversation_id,
-                error_type="unsupported_media",
-            )
+            # Notify Studio Chat BE so has_handoff is set in analytics.
+            # Skipped in shadow mode so observed runs don't pollute analytics
+            # with handoffs that never reached Intercom.
+            if not is_shadow:
+                await studio_chat_client.mark_handoff(
+                    playbook_id=assistant.playbook_id,
+                    conversation_id=conversation_id,
+                    error_type="unsupported_media",
+                )
+            else:
+                logger.info(
+                    "[SHADOW-OUTBOUND] would mark_handoff (studio chat BE) | "
+                    "conversation_id={} error_type=unsupported_media",
+                    conversation_id,
+                )
             return
 
         # For supported media, we need either a message or media content

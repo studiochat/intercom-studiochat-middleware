@@ -40,6 +40,14 @@ assistants:
     # to return a deep_link on the response (default: false).
     include_feedback_note: false
 
+    # Shadow mode. When true, the bridge still calls Studio Chat with real
+    # traffic and processes the response, but NEVER posts replies / notes /
+    # tags / transfers back to Intercom — each suppressed action is logged
+    # with a [SHADOW-OUTBOUND] prefix instead. Use to validate what a playbook
+    # would say on live traffic before going public (default: false).
+    # The SHADOW_MODE=true env var forces this on for ALL assistants.
+    shadow_mode: false
+
     # Rollout configuration
     rollout:
       # Percentage of conversations to route to AI (0-100)

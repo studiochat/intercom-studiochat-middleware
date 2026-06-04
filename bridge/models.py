@@ -162,6 +162,18 @@ class AssistantConfig(BaseModel):
             "a deep_link in the response."
         ),
     )
+    shadow_mode: bool = Field(
+        default=False,
+        description=(
+            "Shadow mode. The bridge calls Studio Chat normally and receives "
+            "the completion, but does NOT post any reply / note / tag / "
+            "transfer / assignment back to Intercom — every side-effect is "
+            "logged with a [SHADOW-OUTBOUND] prefix instead. Use to validate "
+            "what a playbook would say on real production traffic before going "
+            "live. The SHADOW_MODE env var (when truthy) forces this on for ALL "
+            "assistants regardless of this flag."
+        ),
+    )
 
 
 class AppConfig(BaseModel):

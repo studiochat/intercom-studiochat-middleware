@@ -10,6 +10,7 @@ A lightweight, open-source middleware that connects [Intercom](https://www.inter
 - **Multiple Assistants**: Support multiple AI playbooks with independent routing rules
 - **Flexible Routing**: Route conversations based on inbox, tags, or admin assignment
 - **Gradual Rollout**: Control the percentage of conversations handled by AI per assistant
+- **Shadow Mode**: Send real traffic to Studio Chat without ever replying to Intercom — validate a playbook on live conversations before going public (per-assistant `shadow_mode`, or `SHADOW_MODE=true` globally)
 - **Handoff to Humans**: Configurable actions when AI requests handoff (transfer inbox, assign admin, add tags)
 - **Media Message Handling**: Automatic handoff when users send images, audio, video, or attachments
 - **Fallback Handling**: Automatic fallback actions when AI is unavailable or conversation excluded from rollout
@@ -69,6 +70,7 @@ docker-compose up
 | `STUDIO_CHAT_BASE_URL` | No | Base URL of the Studio Chat API (default: `https://api.studiochat.io`) |
 | `INTERCOM_ACCESS_TOKEN` | Yes | Intercom API access token |
 | `ROLLOUT_PERCENTAGE` | No | Percentage of conversations to route to AI (0-100, default: 100) |
+| `SHADOW_MODE` | No | When truthy (`true`/`1`/`yes`/`on`), forces shadow mode for ALL assistants: Studio Chat is called normally but no replies/notes/tags/transfers are sent back to Intercom (logged with `[SHADOW-OUTBOUND]`). Per-assistant override: `shadow_mode` in config. |
 | `PORT` | No | Server port (default: 8080) |
 | `HOST` | No | Server host (default: 0.0.0.0) |
 | `CONFIG_YAML` | No | Raw YAML configuration content (for platforms without filesystem access) |
